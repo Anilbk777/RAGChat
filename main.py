@@ -17,6 +17,11 @@ inngest_client = inngest.Inngest(
     serializer=inngest.PydanticSerializer()
 )
 
+@inngest_client.create_function(
+    fn_id="RAG: Query PDF",
+    trigger=inngest.TriggerEvent(event="rag/query_pdf_ai")
+)
+
 app = FastAPI()
 
 inngest.fast_api.serve(app, inngest_client, [])
