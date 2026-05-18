@@ -21,6 +21,8 @@ inngest_client = inngest.Inngest(
     fn_id="RAG: Query PDF",
     trigger=inngest.TriggerEvent(event="rag/query_pdf_ai")
 )
+async def rag_query_pdf(ctx: inngest.Context):
+    return {"message": "Hello World"}
 
 app = FastAPI()
 
