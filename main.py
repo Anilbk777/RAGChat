@@ -25,7 +25,11 @@ inngest_client = inngest.Inngest(
     trigger=inngest.TriggerEvent(event="rag/query_pdf_ai")
 )
 async def rag_query_pdf(ctx: inngest.Context):
-    return {"message": "Hello World"}
+    def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
+        pdf_path = ctx.event.data["pdf_path"]
+        source_id = ctx.event.data.get("source_id", pdf_path)
+        chunks = load_and_chunk_pdf(pdf_path)
+        return RAGChunkAndSrc(chunks=chunks, source_id=source_id)
 
 app = FastAPI()
 
