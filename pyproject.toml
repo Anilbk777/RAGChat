@@ -1,0 +1,16 @@
+[project]
+name = "rag-chat"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.136.1",
+    "inngest>=0.5.18",
+    "llama-index-core>=0.14.22",
+    "llama-index-readers-file>=0.6.0",
+    "openai>=2.37.0",
+    "python-dotenv>=1.2.2",
+    "qdrant-client>=1.18.0",
+    "uvicorn>=0.47.0",
+]
