@@ -15,7 +15,7 @@ class RAGSearchResult(pydantic.BaseModel):
     sources: list[str]
 
 
-class RAQQueryResult(pydantic.BaseModel):
+class RAGQueryResult(pydantic.BaseModel):
     answer: str
     sources: list[str]
     num_contexts: int

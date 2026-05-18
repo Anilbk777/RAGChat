@@ -2,12 +2,12 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from llama_index.readers.file import PDFReader
 from llama_index.core.node_parser import SentenceSplitter
 from dotenv import load_dotenv
-import os
 import numpy as np
 load_dotenv()
 
+model_name = "sentence-transformers/all-mpnet-base-v2"
 
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2",huggingfacehub_api_token=os.getenv("HUGGING_FACE_API_KEY"))
+embeddings = HuggingFaceEmbeddings(model_name=model_name)
 
 splitter = SentenceSplitter(chunk_size=1000, chunk_overlap=200)
 
