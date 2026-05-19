@@ -1,130 +1,175 @@
-
 import logging
-from fastapi import FastAPI
+import os
+from pathlib import Path
+
+import httpx
 import inngest
 import inngest.fast_api
-from inngest.experimental import ai
 from dotenv import load_dotenv
-import uuid
-import os
-from data_loader import load_and_chunk_pdf, embed_texts
-from vector_db import QdrantStorage
-from custom_types import (
-    RAGSearchResult,
-    RAGUpsertResult,
-    RAGChunkAndSrc,
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
+
+from custom_types import RAGError, QueryRequest
+from services import (
+    inngest_client,
+    rag_ingest_pdf,
+    rag_query_pdf_ai,
+    validate_pdf_file,
 )
 
 load_dotenv()
 
-inngest_client = inngest.Inngest(
-    app_id="rag_app",
-    logger=logging.getLogger("uvicorn"),
-    is_production=False,
-    serializer=inngest.PydanticSerializer(),
+logger = logging.getLogger("uvicorn")
+
+
+# ── FASTAPI APP ──────────────────────────────────────────────────────────────
+
+app = FastAPI(title="DocMind RAG API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-
-# ✅ FIX 1: Renamed fn_id — both functions had identical "RAG: Query PDF" IDs.
-# Inngest requires unique fn_id per function; duplicate IDs cause silent conflicts.
-@inngest_client.create_function(
-    fn_id="RAG: Ingest PDF",
-    trigger=inngest.TriggerEvent(event="rag/ingest_pdf")
-)
-async def rag_ingest_pdf(ctx: inngest.Context):
-    def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
-        pdf_path = ctx.event.data["pdf_path"]
-        source_id = ctx.event.data.get("source_id", pdf_path)
-        chunks = load_and_chunk_pdf(pdf_path)
-        return RAGChunkAndSrc(chunks=chunks, source_id=source_id)
-
-    def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult:
-        chunks = chunks_and_src.chunks
-        source_id = chunks_and_src.source_id
-        vecs = embed_texts(chunks)
-        ids = [
-            str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_id}:{i}"))
-            for i in range(len(chunks))
-        ]
-        payloads = [
-            {"source": source_id, "text": chunks[i]} for i in range(len(chunks))
-        ]
-        QdrantStorage().upsert(ids, vecs, payloads)
-        return RAGUpsertResult(ingested=len(chunks))
-
-    chunks_and_src = await ctx.step.run(
-        "load-and-chunk", lambda: _load(ctx), output_type=RAGChunkAndSrc
-    )
-    ingested = await ctx.step.run(
-        "embed-and-upsert", lambda: _upsert(chunks_and_src), output_type=RAGUpsertResult
-    )
-    return ingested.model_dump()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-@inngest_client.create_function(
-    fn_id="RAG: Query PDF",
-    trigger=inngest.TriggerEvent(event="rag/query_pdf_ai")
-)
-async def rag_query_pdf_ai(ctx: inngest.Context):
-    def _search(question: str, top_k: int = 5) -> RAGSearchResult:
-        query_vec = embed_texts([question])[0]
-        store = QdrantStorage()
-        found = store.search(query_vec, top_k)
-        return RAGSearchResult(contexts=found["contexts"], sources=found["sources"])
+# ── GLOBAL EXCEPTION HANDLERS ────────────────────────────────────────────────
 
-    question = ctx.event.data["question"]
-    top_k = int(ctx.event.data.get("top_k", 5))
-
-    found = await ctx.step.run(
-        "embed-and-search",
-        lambda: _search(question, top_k),
-        output_type=RAGSearchResult,
+@app.exception_handler(RAGError)
+async def rag_error_handler(request, exc: RAGError):
+    logger.error(f"RAGError [{exc.status_code}]: {exc.message}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.message},
     )
 
-    context_block = "\n\n".join(f"- {c}" for c in found.contexts)
-    user_content = (
-        "Use the following context to answer the question.\n\n"
-        f"Context:\n{context_block}\n\n"
-        f"Question: {question}\n"
-        "Answer concisely using the context above."
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request, exc: RequestValidationError):
+    errors = [
+        f"{' → '.join(str(l) for l in e['loc'])}: {e['msg']}" for e in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Invalid request: " + "; ".join(errors)},
     )
 
-    # ✅ FIX 2: Use ai.openai.Adapter with Groq's OpenAI-compatible base_url.
-    # The inngest experimental.ai module has NO groq adapter — only openai & anthropic.
-    # Groq's API is OpenAI-compatible, so we point the OpenAI adapter at Groq's endpoint.
-    # `from groq import Groq` is a Groq SDK client, NOT an inngest BaseAdapter subclass —
-    # passing it to ctx.step.ai.infer() would crash at runtime.
-    adapter = ai.openai.Adapter(
-        auth_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1",   # Groq's OpenAI-compatible endpoint
-        model="llama-3.3-70b-versatile",
+
+@app.exception_handler(Exception)
+async def generic_error_handler(request, exc: Exception):
+    logger.exception(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "An unexpected server error occurred. Please try again."},
     )
 
-    res = await ctx.step.ai.infer(
-        "llm-answer",
-        adapter=adapter,
-        body={
-            "max_tokens": 1024,
-            "temperature": 0.2,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You answer questions using only the provided context.",
+
+# ── FRONTEND ─────────────────────────────────────────────────────────────────
+
+@app.get("/")
+async def serve_frontend():
+    return FileResponse("static/index.html")
+
+
+# ── API ROUTES ────────────────────────────────────────────────────────────────
+
+@app.post("/api/ingest")
+async def ingest_pdf(file: UploadFile = File(...)):
+    try:
+        raw_bytes = await file.read()
+    except Exception as e:
+        raise RAGError(f"Failed to read uploaded file: {e}", 400)
+
+    validate_pdf_file(file, raw_bytes)
+
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    file_path = uploads_dir / file.filename
+
+    try:
+        file_path.write_bytes(raw_bytes)
+    except OSError as e:
+        raise RAGError(f"Could not save file to disk: {e}", 500)
+
+    logger.info(f"[API] PDF saved: {file_path} ({len(raw_bytes) / 1024:.1f} KB)")
+
+    try:
+        await inngest_client.send(
+            inngest.Event(
+                name="rag/ingest_pdf",
+                data={
+                    "pdf_path": str(file_path.resolve()),
+                    "source_id": file.filename,
                 },
-                {"role": "user", "content": user_content},
-            ],
-        },
-    )
+            )
+        )
+    except Exception as e:
+        file_path.unlink(missing_ok=True)
+        raise RAGError(f"Failed to trigger ingestion pipeline: {e}", 502)
 
-    answer = res["choices"][0]["message"]["content"].strip()
-    return {
-        "answer": answer,
-        "sources": found.sources,
-        "num_contexts": len(found.contexts),
-    }
+    return {"status": "triggered", "filename": file.filename}
 
 
-app = FastAPI()
+@app.post("/api/query")
+async def query_pdf(req: QueryRequest):
+    try:
+        events = await inngest_client.send(
+            inngest.Event(
+                name="rag/query_pdf_ai",
+                data={"question": req.question, "top_k": req.top_k},
+            )
+        )
+    except Exception as e:
+        raise RAGError(f"Failed to send query event to Inngest: {e}", 502)
 
-# ✅ FIX 3: Updated function list to use the renamed ingest function
+    if not events:
+        raise RAGError("Inngest did not return an event ID.", 502)
+
+    return {"event_id": events[0]}
+
+
+@app.get("/api/run/{event_id}")
+async def get_run_status(event_id: str):
+    if not event_id.strip():
+        raise RAGError("event_id cannot be empty.", 400)
+
+    inngest_api = os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{inngest_api}/events/{event_id}/runs")
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.TimeoutException:
+        raise RAGError("Timed out contacting Inngest API.", 504)
+    except httpx.HTTPStatusError as e:
+        raise RAGError(f"Inngest API returned error {e.response.status_code}.", 502)
+    except Exception as e:
+        raise RAGError(f"Could not reach Inngest API: {e}", 502)
+
+    runs = data.get("data", [])
+    if not runs:
+        return {"status": "pending"}
+
+    run = runs[0]
+    status = run.get("status")
+    output = run.get("output")
+
+    if status in ("Failed", "Cancelled"):
+        error_msg = "The background job failed."
+        if isinstance(output, dict) and output.get("error"):
+            error_msg = output["error"]
+        return {"status": status, "error": error_msg}
+
+    return {"status": status, "output": output}
+
+
+# ── INNGEST SERVE (must be last) ──────────────────────────────────────────────
+
 inngest.fast_api.serve(app, inngest_client, [rag_ingest_pdf, rag_query_pdf_ai])
