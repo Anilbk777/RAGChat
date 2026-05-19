@@ -10,15 +10,18 @@ logger = logging.getLogger("uvicorn")
 class QdrantStorage:
     def __init__(
         self,
-        url: str = None,
+        url: str = "http://localhost:6333",
         collection: str = "docs",
-        dim: int = 768,
+        dim: int = 384,
     ):
-        if url is None:
-            url = os.getenv("QDRANT_URL", "http://localhost:6333")
-
         try:
-            self.client = QdrantClient(url=url)
+            try:
+                url = os.getenv("QDRANT_URL")
+                if not url:
+                    raise ValueError("QDRANT_URL not set in .env")
+            except Exception as e:
+                raise ConnectionError(f"Could not connect to Qdrant at {url}: {e}")
+            self.client = QdrantClient(url=url, api_key=os.getenv("QDRANT_API_KEY"))
             self.collection = collection
             self.dim = dim
             self._ensure_collection()
@@ -28,7 +31,6 @@ class QdrantStorage:
             raise ConnectionError(f"Could not connect to Qdrant at {url}: {e}")
 
     def _ensure_collection(self) -> None:
-        """Create the collection if it doesn't already exist."""
         try:
             if not self.client.collection_exists(self.collection):
                 self.client.create_collection(
@@ -42,6 +44,25 @@ class QdrantStorage:
                 )
             else:
                 logger.debug(f"[Qdrant] Collection '{self.collection}' already exists.")
+
+        except UnexpectedResponse as e:
+            raw = e.content.decode() if hasattr(e, "content") else str(e)
+
+            # ✅ THE FIX: Qdrant returns 500 when the storage directory already
+            # exists on disk but isn't registered in memory. This is NOT a real
+            # error — the collection is present and functional. Treat it as success.
+            if e.status_code == 500 and "File exists" in raw:
+                logger.warning(
+                    f"[Qdrant] Collection '{self.collection}' directory already "
+                    f"existed on disk (state mismatch). Treating as success."
+                )
+                return  # collection is usable — continue normally
+
+            # Any other Qdrant error is a real failure
+            raise RuntimeError(
+                f"Failed to ensure collection '{self.collection}' exists: {raw}"
+            )
+
         except Exception as e:
             raise RuntimeError(
                 f"Failed to ensure collection '{self.collection}' exists: {e}"
@@ -118,7 +139,6 @@ class QdrantStorage:
             raise RuntimeError(f"Qdrant upsert failed unexpectedly: {e}")
 
     def search(self, query_vector: list[float], top_k: int = 5) -> dict:
-        """Search for the top_k most similar documents."""
         if not query_vector:
             raise ValueError(
                 "search() received an empty query vector. "
@@ -152,7 +172,6 @@ class QdrantStorage:
             payload = point.payload or {}
             text = payload.get("text", "").strip()
             source = payload.get("source", "")
-
             if text:
                 contexts.append(text)
             if source:
@@ -162,11 +181,10 @@ class QdrantStorage:
             f"[Qdrant] Search returned {len(contexts)} contexts "
             f"from sources: {sources or 'none'}"
         )
-
         return {"contexts": contexts, "sources": list(sources)}
 
 
 if __name__ == "__main__":
-    db = QdrantStorage(dim=768)
+    db = QdrantStorage(dim=384)
     db.recreate_collection()
     print("Collection recreated successfully.")

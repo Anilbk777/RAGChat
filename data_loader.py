@@ -5,11 +5,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class DocumentParser:
 
+class DocumentParser:
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
         self.reader = PDFReader()
-        self.splitter = SentenceSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        self.splitter = SentenceSplitter(
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap
+        )
 
     def parse_pdf(self, path: str) -> list[str]:
         docs = self.reader.load_data(file=path)
@@ -21,13 +23,13 @@ class DocumentParser:
 
 
 class TextEmbedder:
-
-    def __init__(self, model_name: str = "sentence-transformers/all-mpnet-base-v2"):
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
         self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         # HuggingFaceEmbeddings returns a list of embedding vectors (list of list of float)
         return self.embeddings.embed_documents(texts)
+
 
 _default_parser = DocumentParser()
 _default_embedder = TextEmbedder()

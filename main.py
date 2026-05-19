@@ -1,6 +1,6 @@
 import logging
 import os
-from pathlib import Path
+# from pathlib import Path
 
 import httpx
 import inngest
@@ -13,12 +13,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 
 from custom_types import RAGError, QueryRequest
+from data_loader import DocumentParser
 from services import (
     inngest_client,
     rag_ingest_pdf,
     rag_query_pdf_ai,
     validate_pdf_file,
+    RAGService,
 )
+
 
 load_dotenv()
 
@@ -69,6 +72,7 @@ async def generic_error_handler(request, exc: Exception):
 async def serve_frontend():
     return FileResponse("static/index.html")
 
+
 @app.post("/api/ingest")
 async def ingest_pdf(file: UploadFile = File(...)):
     try:
@@ -78,29 +82,40 @@ async def ingest_pdf(file: UploadFile = File(...)):
 
     validate_pdf_file(file, raw_bytes)
 
-    uploads_dir = Path("uploads")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    file_path = uploads_dir / file.filename
-
+    import tempfile
     try:
-        file_path.write_bytes(raw_bytes)
-    except OSError as e:
-        raise RAGError(f"Could not save file to disk: {e}", 500)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(raw_bytes)
+            tmp_path = tmp.name
 
-    logger.info(f"[API] PDF saved: {file_path} ({len(raw_bytes) / 1024:.1f} KB)")
+        try:
+            parser = DocumentParser()
+            chunks = parser.parse_pdf(tmp_path)
+        except Exception as e:
+            raise RAGError(f"Failed to parse PDF document: {e}", 422)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    except Exception as e:
+        if not isinstance(e, RAGError):
+            raise RAGError(f"Failed to process file in memory: {e}", 500)
+        raise
+
+    RAGService.validate_chunks(chunks, file.filename)
+
+    logger.info(f"[API] PDF successfully parsed in memory: {file.filename} ({len(chunks)} chunks)")
 
     try:
         await inngest_client.send(
             inngest.Event(
                 name="rag/ingest_pdf",
                 data={
-                    "pdf_path": str(file_path.resolve()),
+                    "chunks": chunks,
                     "source_id": file.filename,
                 },
             )
         )
     except Exception as e:
-        file_path.unlink(missing_ok=True)
         raise RAGError(f"Failed to trigger ingestion pipeline: {e}", 502)
 
     return {"status": "triggered", "filename": file.filename}

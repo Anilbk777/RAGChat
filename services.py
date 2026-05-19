@@ -163,24 +163,12 @@ def validate_pdf_file(file: UploadFile, raw_bytes: bytes) -> None:
 async def rag_ingest_pdf(ctx: inngest.Context):
 
     def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
-        pdf_path = ctx.event.data["pdf_path"]
-        source_id = ctx.event.data.get("source_id", pdf_path)
-        filename = Path(pdf_path).name
+        chunks = ctx.event.data["chunks"]
+        source_id = ctx.event.data.get("source_id", "document")
 
-        logger.info(f"[Ingest] Loading PDF: {filename}")
-        
-        service = RAGService(DocumentParser(), TextEmbedder(), QdrantStorage())
-        try:
-            chunks = service.parser.parse_pdf(pdf_path)
-        except FileNotFoundError:
-            raise RAGError(f"PDF file not found on disk: {pdf_path}", 404)
-        except PermissionError:
-            raise RAGError(f"Permission denied reading: {pdf_path}", 403)
-        except Exception as e:
-            raise PDFNotReadableError(str(e))
-
-        service.validate_chunks(chunks, filename)
+        logger.info(f"[Ingest] Processing pre-parsed document: {source_id} ({len(chunks)} chunks)")
         return RAGChunkAndSrc(chunks=chunks, source_id=source_id)
+
 
     def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult:
         chunks = chunks_and_src.chunks
