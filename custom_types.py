@@ -1,10 +1,6 @@
 from pydantic import BaseModel, validator
 
-
-# ── CUSTOM EXCEPTIONS ────────────────────────────────────────────────────────
-
 class RAGError(Exception):
-    """Base class for all RAG pipeline errors."""
 
     def __init__(self, message: str, status_code: int = 500):
         self.message = message
@@ -85,8 +81,6 @@ class LLMError(RAGError):
             msg += f" Detail: {detail}"
         super().__init__(msg, 502)
 
-
-# ── PYDANTIC SCHEMAS ─────────────────────────────────────────────────────────
 
 class RAGChunkAndSrc(BaseModel):
     chunks: list[str]

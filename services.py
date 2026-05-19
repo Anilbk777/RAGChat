@@ -27,15 +27,10 @@ from vector_db import QdrantStorage
 
 logger = logging.getLogger("uvicorn")
 
-# ── CONSTANTS ────────────────────────────────────────────────────────────────
-
 MAX_PDF_SIZE_MB = 50
 MAX_PDF_SIZE_BYTES = MAX_PDF_SIZE_MB * 1024 * 1024
-MIN_CHUNK_LENGTH = 20  # chars — below this a chunk is considered garbage
+MIN_CHUNK_LENGTH = 20 
 MIN_CHUNKS_REQUIRED = 1
-
-
-# ── ORCHESTRATION SERVICE ────────────────────────────────────────────────────
 
 class RAGService:
     """Orchestrates PDF text loading, embedding, and vector database operations."""
@@ -130,17 +125,12 @@ class RAGService:
         )
 
 
-# ── INNGEST CLIENT ───────────────────────────────────────────────────────────
-
 inngest_client = inngest.Inngest(
     app_id="rag_app",
     logger=logger,
     is_production=False,
     serializer=inngest.PydanticSerializer(),
 )
-
-
-# ── HELPERS ──────────────────────────────────────────────────────────────────
 
 def validate_pdf_file(file: UploadFile, raw_bytes: bytes) -> None:
     """Run all pre-processing validations on the uploaded file."""
@@ -165,9 +155,6 @@ def validate_pdf_file(file: UploadFile, raw_bytes: bytes) -> None:
     size_mb = len(raw_bytes) / (1024 * 1024)
     if len(raw_bytes) > MAX_PDF_SIZE_BYTES:
         raise PDFTooBigError(size_mb)
-
-
-# ── INNGEST FUNCTIONS ────────────────────────────────────────────────────────
 
 @inngest_client.create_function(
     fn_id="RAG: Ingest PDF",

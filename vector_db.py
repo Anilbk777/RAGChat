@@ -8,8 +8,6 @@ logger = logging.getLogger("uvicorn")
 
 
 class QdrantStorage:
-    """Service to interact with the Qdrant vector database."""
-
     def __init__(
         self,
         url: str = None,
@@ -18,12 +16,11 @@ class QdrantStorage:
     ):
         if url is None:
             url = os.getenv("QDRANT_URL", "http://localhost:6333")
-            
+
         try:
             self.client = QdrantClient(url=url)
             self.collection = collection
             self.dim = dim
-            # Ensure the collection is automatically set up
             self._ensure_collection()
         except UnexpectedResponse as e:
             raise ConnectionError(f"Qdrant returned an error during init: {e}")
@@ -51,11 +48,9 @@ class QdrantStorage:
             )
 
     def create_collection(self) -> None:
-        """Public method kept for backwards compatibility."""
         self._ensure_collection()
 
     def delete_collection(self) -> None:
-        """Delete the current collection."""
         try:
             if self.client.collection_exists(self.collection):
                 self.client.delete_collection(self.collection)
@@ -64,13 +59,12 @@ class QdrantStorage:
             raise RuntimeError(f"Failed to delete collection '{self.collection}': {e}")
 
     def recreate_collection(self) -> None:
-        """Recreate the current collection (drops and recreates)."""
         self.delete_collection()
         self._ensure_collection()
 
-    def upsert(self, ids: list[str], vectors: list[list[float]], payloads: list[dict]) -> None:
-        """Upsert document embedding points with payloads into the vector store."""
-        # ── GUARDS ───────────────────────────────────────────────────────────
+    def upsert(
+        self, ids: list[str], vectors: list[list[float]], payloads: list[dict]
+    ) -> None:
         if not ids:
             raise ValueError(
                 "upsert() received an empty ids list. "
@@ -105,7 +99,6 @@ class QdrantStorage:
                     "Update QdrantStorage(dim=...) to match your embedding model."
                 )
 
-        # ── BUILD & SEND ─────────────────────────────────────────────────────
         points = [
             PointStruct(id=ids[i], vector=vectors[i], payload=payloads[i])
             for i in range(len(ids))
@@ -126,7 +119,6 @@ class QdrantStorage:
 
     def search(self, query_vector: list[float], top_k: int = 5) -> dict:
         """Search for the top_k most similar documents."""
-        # ── GUARDS ───────────────────────────────────────────────────────────
         if not query_vector:
             raise ValueError(
                 "search() received an empty query vector. "

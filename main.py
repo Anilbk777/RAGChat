@@ -25,8 +25,6 @@ load_dotenv()
 logger = logging.getLogger("uvicorn")
 
 
-# ── FASTAPI APP ──────────────────────────────────────────────────────────────
-
 app = FastAPI(title="DocMind RAG API")
 
 app.add_middleware(
@@ -37,9 +35,6 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-# ── GLOBAL EXCEPTION HANDLERS ────────────────────────────────────────────────
 
 @app.exception_handler(RAGError)
 async def rag_error_handler(request, exc: RAGError):
@@ -70,14 +65,9 @@ async def generic_error_handler(request, exc: Exception):
     )
 
 
-# ── FRONTEND ─────────────────────────────────────────────────────────────────
-
 @app.get("/")
 async def serve_frontend():
     return FileResponse("static/index.html")
-
-
-# ── API ROUTES ────────────────────────────────────────────────────────────────
 
 @app.post("/api/ingest")
 async def ingest_pdf(file: UploadFile = File(...)):
@@ -168,8 +158,5 @@ async def get_run_status(event_id: str):
         return {"status": status, "error": error_msg}
 
     return {"status": status, "output": output}
-
-
-# ── INNGEST SERVE (must be last) ──────────────────────────────────────────────
 
 inngest.fast_api.serve(app, inngest_client, [rag_ingest_pdf, rag_query_pdf_ai])
